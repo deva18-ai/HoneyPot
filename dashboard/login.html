@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>HoneyTrap Login</title>
+<style>
+body{font-family:Arial;background:#f3f5f7;display:grid;place-items:center;height:100vh}
+.card{background:white;padding:32px;border-radius:14px;width:330px;box-shadow:0 8px 30px #0001}
+input,button{width:100%;padding:11px;margin:7px 0;box-sizing:border-box}
+button{background:#17202a;color:white;border:0;border-radius:7px;cursor:pointer}
+small{color:#667}
+</style></head>
+<body><div class="card">
+<h2>HoneyTrap SOC</h2><p>Defensive monitoring dashboard</p>
+<input id="u" placeholder="Username" value="admin">
+<input id="p" placeholder="Password" type="password" value="honeytrap-admin">
+<button onclick="login()">Sign in</button>
+<small>Demo: admin/honeytrap-admin or viewer/honeytrap-viewer</small>
+<p id="msg"></p>
+</div>
+<script>
+async function login(){
+ const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({username:u.value,password:p.value})});
+ if(r.ok) location='/'; else msg.textContent='Invalid demo credentials';
+}
+</script></body></html>

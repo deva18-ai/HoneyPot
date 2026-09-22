@@ -1,0 +1,41 @@
+# Core
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+pydantic>=2.7,<3
+pydantic-settings>=2.3,<3
+python-multipart>=0.0.6,<1
+
+# Database
+sqlalchemy>=2.0,<3
+alembic>=1.13,<2
+aiosqlite>=0.19,<1
+
+# Auth & Security
+argon2-cffi>=23.1,<24
+python-jose[cryptography]>=3.3,<4
+passlib[argon2]>=1.7,<2
+bcrypt>=4.1,<5
+
+# Async & Workers
+redis>=5.0,<6
+rq>=1.15,<2
+
+# Validation & Serialization
+orjson>=3.9,<4
+
+# Monitoring & Observability
+prometheus-client>=0.19,<1
+structlog>=24.1,<25
+
+# Reporting
+reportlab>=4.0,<5
+
+# Testing
+pytest>=8.0,<9
+pytest-asyncio>=0.23,<1
+pytest-cov>=4.1,<5
+httpx>=0.27,<1
+
+# Utilities
+python-dotenv>=1.0,<2
+requests>=2.31,<3
