@@ -1,3 +1,3 @@
-from backend.db.session import get_db, init_db, close_db, async_session_maker
+from backend.db.session import async_session_maker, close_db, get_db, init_db
 
-__all__ = ["get_db", "init_db", "close_db", "async_session_maker"]
+__all__ = ["async_session_maker", "close_db", "get_db", "init_db"]

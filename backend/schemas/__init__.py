@@ -1,7 +1,8 @@
-from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List, Any
 from datetime import datetime
 from enum import Enum
+from typing import Any, List
+
+from pydantic import BaseModel, EmailStr, Field
 
 
 class UserRole(str, Enum):
@@ -12,7 +13,7 @@ class UserRole(str, Enum):
 
 class UserBase(BaseModel):
     username: str = Field(..., min_length=3, max_length=100)
-    email: Optional[EmailStr] = None
+    email: EmailStr | None = None
     role: UserRole = UserRole.VIEWER
 
 
@@ -21,10 +22,10 @@ class UserCreate(UserBase):
 
 
 class UserUpdate(BaseModel):
-    email: Optional[EmailStr] = None
-    role: Optional[UserRole] = None
-    is_active: Optional[bool] = None
-    password: Optional[str] = Field(None, min_length=8, max_length=100)
+    email: EmailStr | None = None
+    role: UserRole | None = None
+    is_active: bool | None = None
+    password: str | None = Field(None, min_length=8, max_length=100)
 
 
 class UserResponse(UserBase):
@@ -32,7 +33,7 @@ class UserResponse(UserBase):
     is_active: bool
     created_at: datetime
     updated_at: datetime
-    last_login: Optional[datetime] = None
+    last_login: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -62,7 +63,7 @@ class HealthResponse(BaseModel):
 
 
 class PaginatedResponse(BaseModel):
-    items: List[Any]
+    items: list[Any]
     total: int
     page: int
     page_size: int
@@ -73,30 +74,30 @@ class EventBase(BaseModel):
     source_ip: str
     service: str
     event_type: str
-    username: Optional[str] = None
-    password: Optional[str] = None
-    request_path: Optional[str] = None
-    payload: Optional[str] = None
-    result: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
+    request_path: str | None = None
+    payload: str | None = None
+    result: str | None = None
     severity: str = "LOW"
-    fingerprint: Optional[str] = None
-    country: Optional[str] = None
+    fingerprint: str | None = None
+    country: str | None = None
     threat_score: int = 0
-    classification: Optional[str] = None
-    mitre_techniques: Optional[str] = None
-    confidence: Optional[str] = None
+    classification: str | None = None
+    mitre_techniques: str | None = None
+    confidence: str | None = None
 
 
 class EventCreate(EventBase):
-    timestamp: Optional[datetime] = None
-    session_id: Optional[int] = None
+    timestamp: datetime | None = None
+    session_id: int | None = None
 
 
 class EventResponse(EventBase):
     id: int
     timestamp: datetime
-    session_id: Optional[int] = None
-    event_hash: Optional[str] = None
+    session_id: int | None = None
+    event_hash: str | None = None
 
     class Config:
         from_attributes = True
@@ -106,15 +107,15 @@ class SessionBase(BaseModel):
     source_ip: str
     service: str
     risk_level: str = "LOW"
-    classification: Optional[str] = None
+    classification: str | None = None
     threat_score: int = 0
-    mitre_techniques: Optional[str] = None
+    mitre_techniques: str | None = None
 
 
 class SessionResponse(SessionBase):
     id: int
     started_at: datetime
-    ended_at: Optional[datetime] = None
+    ended_at: datetime | None = None
     event_count: int
 
     class Config:
@@ -131,9 +132,9 @@ class AlertResponse(AlertBase):
     event_id: int
     created_at: datetime
     acknowledged: bool
-    acknowledged_at: Optional[datetime] = None
-    acknowledged_by: Optional[int] = None
-    event: Optional[EventResponse] = None
+    acknowledged_at: datetime | None = None
+    acknowledged_by: int | None = None
+    event: EventResponse | None = None
 
     class Config:
         from_attributes = True
@@ -145,9 +146,9 @@ class IPStatsBase(BaseModel):
     failed_logins: int = 0
     services_hit: int = 0
     threat_score: int = 0
-    country: Optional[str] = None
-    asn: Optional[str] = None
-    isp: Optional[str] = None
+    country: str | None = None
+    asn: str | None = None
+    isp: str | None = None
     reputation_score: int = 0
     is_blocked: bool = False
 
@@ -176,15 +177,15 @@ class RiskLevel(str, Enum):
 
 
 class IncidentBase(BaseModel):
-    title: Optional[str] = None
+    title: str | None = None
     risk_level: RiskLevel = RiskLevel.LOW
     threat_score: int = 0
     classification: str
     status: IncidentStatus = IncidentStatus.OPEN
     source_ip: str
-    target_service: Optional[str] = None
-    mitre_techniques: Optional[str] = None
-    tags: Optional[str] = None
+    target_service: str | None = None
+    mitre_techniques: str | None = None
+    tags: str | None = None
 
 
 class IncidentCreate(IncidentBase):
@@ -192,15 +193,15 @@ class IncidentCreate(IncidentBase):
 
 
 class IncidentUpdate(BaseModel):
-    title: Optional[str] = None
-    risk_level: Optional[RiskLevel] = None
-    threat_score: Optional[int] = None
-    classification: Optional[str] = None
-    status: Optional[IncidentStatus] = None
-    target_service: Optional[str] = None
-    assignee_id: Optional[int] = None
-    mitre_techniques: Optional[str] = None
-    tags: Optional[str] = None
+    title: str | None = None
+    risk_level: RiskLevel | None = None
+    threat_score: int | None = None
+    classification: str | None = None
+    status: IncidentStatus | None = None
+    target_service: str | None = None
+    assignee_id: int | None = None
+    mitre_techniques: str | None = None
+    tags: str | None = None
 
 
 class IncidentResponse(IncidentBase):
@@ -211,12 +212,12 @@ class IncidentResponse(IncidentBase):
     duration_seconds: int
     event_count: int
     alert_count: int
-    assignee_id: Optional[int] = None
+    assignee_id: int | None = None
     created_at: datetime
     updated_at: datetime
-    closed_at: Optional[datetime] = None
-    closed_by: Optional[int] = None
-    assignee: Optional[UserResponse] = None
+    closed_at: datetime | None = None
+    closed_by: int | None = None
+    assignee: UserResponse | None = None
 
     class Config:
         from_attributes = True
@@ -227,9 +228,9 @@ class IncidentEventResponse(BaseModel):
     incident_id: int
     event_id: int
     sequence: int
-    behavior_stage: Optional[str] = None
+    behavior_stage: str | None = None
     is_key_event: bool = False
-    event: Optional[EventResponse] = None
+    event: EventResponse | None = None
 
     class Config:
         from_attributes = True
@@ -247,10 +248,10 @@ class IncidentNoteCreate(IncidentNoteBase):
 class IncidentNoteResponse(IncidentNoteBase):
     id: int
     incident_id: int
-    author_id: Optional[int] = None
+    author_id: int | None = None
     created_at: datetime
     updated_at: datetime
-    author: Optional[UserResponse] = None
+    author: UserResponse | None = None
 
     class Config:
         from_attributes = True
@@ -259,10 +260,10 @@ class IncidentNoteResponse(IncidentNoteBase):
 class IncidentEvidenceBase(BaseModel):
     evidence_type: str
     title: str
-    description: Optional[str] = None
-    file_path: Optional[str] = None
-    content: Optional[str] = None
-    mime_type: Optional[str] = None
+    description: str | None = None
+    file_path: str | None = None
+    content: str | None = None
+    mime_type: str | None = None
     size_bytes: int = 0
 
 
@@ -283,15 +284,15 @@ class MitreTechniqueResponse(BaseModel):
     id: int
     technique_id: str
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     tactic: str
-    platform: Optional[str] = None
-    detection: Optional[str] = None
-    mitigation: Optional[str] = None
-    references: Optional[str] = None
-    sub_techniques: Optional[str] = None
+    platform: str | None = None
+    detection: str | None = None
+    mitigation: str | None = None
+    references: str | None = None
+    sub_techniques: str | None = None
     is_subtechnique: bool = False
-    parent_technique: Optional[str] = None
+    parent_technique: str | None = None
 
     class Config:
         from_attributes = True
@@ -308,6 +309,6 @@ class DashboardStats(BaseModel):
     events_last_hour: int
     events_last_24h: int
     avg_threat_score: float
-    top_classifications: List[dict]
-    attack_trend: List[dict]
-    service_heatmap: List[dict]
+    top_classifications: list[dict]
+    attack_trend: list[dict]
+    service_heatmap: list[dict]

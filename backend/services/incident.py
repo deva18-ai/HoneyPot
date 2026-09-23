@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from typing import Optional
 
 
 def generate_incident_id() -> str:
@@ -21,63 +20,92 @@ def calculate_risk_level(score: int) -> str:
 def classify_attack(event_data: dict, recent_events: list) -> dict:
     classifications = []
     score = 0
-    
+
     event_type = event_data.get("event_type", "")
-    service = event_data.get("service", "")
     payload = str(event_data.get("payload") or "").lower()
     path = str(event_data.get("request_path") or "").lower()
     result = event_data.get("result", "")
     source_ip = event_data.get("source_ip", "")
-    
-    failed_logins = sum(1 for e in recent_events 
-                       if e.get("source_ip") == source_ip 
-                       and e.get("event_type") == "AUTH_ATTEMPT" 
-                       and e.get("result") == "FAIL")
-    
-    services_hit = len(set(e.get("service") for e in recent_events if e.get("source_ip") == source_ip))
-    
+
+    failed_logins = sum(
+        1
+        for e in recent_events
+        if e.get("source_ip") == source_ip
+        and e.get("event_type") == "AUTH_ATTEMPT"
+        and e.get("result") == "FAIL"
+    )
+
+    services_hit = len(
+        {e.get("service") for e in recent_events if e.get("source_ip") == source_ip}
+    )
+
     if event_type == "AUTH_ATTEMPT" and result == "FAIL":
         classifications.append("AUTH_ATTEMPT")
         score += 10
-    
+
     if failed_logins >= 5:
         classifications.append("BRUTE_FORCE")
         score += 50
     elif failed_logins >= 3:
         classifications.append("BRUTE_FORCE_ATTEMPT")
         score += 25
-    
-    suspicious_paths = ["/admin", "/backup", "/.env", "/config", "/phpmyadmin", "/wp-admin", "/wp-login", "/administrator"]
+
+    suspicious_paths = [
+        "/admin",
+        "/backup",
+        "/.env",
+        "/config",
+        "/phpmyadmin",
+        "/wp-admin",
+        "/wp-login",
+        "/administrator",
+    ]
     if any(p in path for p in suspicious_paths):
         classifications.append("WEB_RECON")
         score += 25
-    
+
     if services_hit >= 3:
         classifications.append("SERVICE_SCAN")
         score += 35
     elif services_hit >= 2:
         classifications.append("MULTI_SERVICE_ACCESS")
         score += 15
-    
-    exploit_patterns = ["exploit", "shell", "cmd", "exec", "eval", "system(", "passthru", "base64_decode", "wget ", "curl ", "nc -e", "/bin/sh", "/bin/bash", "powershell", "cmd.exe"]
+
+    exploit_patterns = [
+        "exploit",
+        "shell",
+        "cmd",
+        "exec",
+        "eval",
+        "system(",
+        "passthru",
+        "base64_decode",
+        "wget ",
+        "curl ",
+        "nc -e",
+        "/bin/sh",
+        "/bin/bash",
+        "powershell",
+        "cmd.exe",
+    ]
     if any(p in payload for p in exploit_patterns):
         classifications.append("EXPLOIT_ATTEMPT")
         score += 60
-    
+
     if "hydra" in payload or "medusa" in payload or "ncrack" in payload:
         classifications.append("BRUTE_FORCE_TOOL")
         score += 30
-    
+
     if "nmap" in payload or "masscan" in payload or "zmap" in payload:
         classifications.append("PORT_SCAN_TOOL")
         score += 30
-    
+
     if not classifications:
         classifications.append("NORMAL")
         score = 5
-    
+
     score = min(100, max(0, score))
-    
+
     return {
         "classification": "|".join(classifications),
         "threat_score": score,
@@ -103,10 +131,10 @@ def map_to_mitre(classification: str) -> list:
         "PRIVILEGE_ESCALATION": ["T1068", "T1548"],
         "DEFENSE_EVASION": ["T1070", "T1222"],
     }
-    
+
     techniques = set()
     for cls in classification.split("|"):
         if cls in mitre_map:
             techniques.update(mitre_map[cls])
-    
+
     return list(techniques)

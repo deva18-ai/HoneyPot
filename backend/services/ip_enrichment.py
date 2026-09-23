@@ -1,11 +1,12 @@
-from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any
-import structlog
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from backend.db.session import async_session_maker
-from backend.models import IPStats, EnrichmentCache
-from backend.core.config import get_settings
+import structlog
 from sqlalchemy import select
+
+from backend.core.config import get_settings
+from backend.db.session import async_session_maker
+from backend.models import EnrichmentCache, IPStats
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -15,7 +16,9 @@ class IPEnrichmentService:
     def __init__(self):
         self.cache_ttl = settings.ENRICHMENT_CACHE_TTL
 
-    async def _get_cached(self, cache_key: str, cache_type: str) -> Optional[Dict[str, Any]]:
+    async def _get_cached(
+        self, cache_key: str, cache_type: str
+    ) -> dict[str, Any] | None:
         async with async_session_maker() as db:
             result = await db.execute(
                 select(EnrichmentCache)
@@ -26,11 +29,13 @@ class IPEnrichmentService:
             cache = result.scalar_one_or_none()
             if cache:
                 import json
+
                 return json.loads(cache.data)
         return None
 
-    async def _set_cache(self, cache_key: str, cache_type: str, data: Dict[str, Any]):
+    async def _set_cache(self, cache_key: str, cache_type: str, data: dict[str, Any]):
         import json
+
         async with async_session_maker() as db:
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=self.cache_ttl)
             cache = EnrichmentCache(
@@ -43,7 +48,7 @@ class IPEnrichmentService:
             db.add(cache)
             await db.commit()
 
-    async def enrich_ip(self, ip: str) -> Dict[str, Any]:
+    async def enrich_ip(self, ip: str) -> dict[str, Any]:
         cache_key = f"ip:{ip}"
         cached = await self._get_cached(cache_key, "ip_enrichment")
         if cached:
@@ -60,19 +65,27 @@ class IPEnrichmentService:
         if settings.ABUSEIPDB_API_KEY:
             try:
                 import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        f"https://api.abuseipdb.com/api/v2/check",
+
+                async with (
+                    aiohttp.ClientSession() as session,
+                    session.get(
+                        "https://api.abuseipdb.com/api/v2/check",
                         params={"ipAddress": ip, "maxAgeInDays": 90},
-                        headers={"Key": settings.ABUSEIPDB_API_KEY, "Accept": "application/json"},
-                    ) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            enriched["country"] = data.get("data", {}).get("countryCode")
-                            enriched["asn"] = data.get("data", {}).get("asn")
-                            enriched["isp"] = data.get("data", {}).get("isp")
-                            enriched["reputation_score"] = data.get("data", {}).get("abuseConfidenceScore", 0)
-            except Exception as e:
+                        headers={
+                            "Key": settings.ABUSEIPDB_API_KEY,
+                            "Accept": "application/json",
+                        },
+                    ) as resp,
+                ):
+                    if resp.status == 200:
+                        data = await resp.json()
+                        enriched["country"] = data.get("data", {}).get("countryCode")
+                        enriched["asn"] = data.get("data", {}).get("asn")
+                        enriched["isp"] = data.get("data", {}).get("isp")
+                        enriched["reputation_score"] = data.get("data", {}).get(
+                            "abuseConfidenceScore", 0
+                        )
+            except Exception as e:  # noqa: BLE001
                 logger.warning("abuseipdb_enrichment_failed", ip=ip, error=str(e))
 
         await self._set_cache(cache_key, "ip_enrichment", enriched)
@@ -80,11 +93,11 @@ class IPEnrichmentService:
 
     async def update_ip_stats(self, ip: str):
         enriched = await self.enrich_ip(ip)
-        
+
         async with async_session_maker() as db:
             result = await db.execute(select(IPStats).where(IPStats.source_ip == ip))
             stats = result.scalar_one_or_none()
-            
+
             if stats:
                 if enriched.get("country"):
                     stats.country = enriched["country"]

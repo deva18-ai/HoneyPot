@@ -1,6 +1,14 @@
 from datetime import datetime, timezone
+
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Index, UniqueConstraint
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -24,8 +32,12 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     last_login = Column(DateTime(timezone=True), nullable=True)
 
-    refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
-    incidents = relationship("Incident", back_populates="assignee", foreign_keys="Incident.assignee_id")
+    refresh_tokens = relationship(
+        "RefreshToken", back_populates="user", cascade="all, delete-orphan"
+    )
+    incidents = relationship(
+        "Incident", back_populates="assignee", foreign_keys="Incident.assignee_id"
+    )
     notes = relationship("IncidentNote", back_populates="author")
 
 
@@ -33,7 +45,9 @@ class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     token_hash = Column(String(255), unique=True, nullable=False, index=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), default=utc_now)
@@ -48,7 +62,9 @@ class Event(Base):
     __tablename__ = "events"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
+    timestamp = Column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
     source_ip = Column(String(45), nullable=False, index=True)
     service = Column(String(50), nullable=False, index=True)
     event_type = Column(String(100), nullable=False, index=True)
@@ -58,7 +74,12 @@ class Event(Base):
     payload = Column(Text, nullable=True)
     result = Column(String(20), nullable=True)
     severity = Column(String(20), nullable=False, default="LOW", index=True)
-    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True, index=True)
+    session_id = Column(
+        Integer,
+        ForeignKey("sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     fingerprint = Column(String(100), nullable=True)
     country = Column(String(100), nullable=True)
     threat_score = Column(Integer, default=0, index=True)
@@ -96,7 +117,9 @@ class Session(Base):
     threat_score = Column(Integer, default=0)
     mitre_techniques = Column(Text, nullable=True)
 
-    events = relationship("Event", back_populates="session", cascade="all, delete-orphan")
+    events = relationship(
+        "Event", back_populates="session", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_sessions_ip_time", "source_ip", "started_at"),
@@ -109,13 +132,19 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    event_id = Column(Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_id = Column(
+        Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     alert_type = Column(String(100), nullable=False, index=True)
     message = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
+    created_at = Column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
     acknowledged = Column(Boolean, default=False)
     acknowledged_at = Column(DateTime(timezone=True), nullable=True)
-    acknowledged_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    acknowledged_by = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     event = relationship("Event", back_populates="alerts")
 
@@ -174,23 +203,37 @@ class Incident(Base):
     status = Column(String(30), nullable=False, default="open", index=True)
     source_ip = Column(String(45), nullable=False, index=True)
     target_service = Column(String(50), nullable=True)
-    first_seen = Column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
+    first_seen = Column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
     last_seen = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     duration_seconds = Column(Integer, default=0)
     event_count = Column(Integer, default=0)
     alert_count = Column(Integer, default=0)
-    assignee_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    assignee_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     mitre_techniques = Column(Text, nullable=True)
     tags = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     closed_at = Column(DateTime(timezone=True), nullable=True)
-    closed_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    closed_by = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
-    assignee = relationship("User", back_populates="incidents", foreign_keys=[assignee_id])
-    events = relationship("IncidentEvent", back_populates="incident", cascade="all, delete-orphan")
-    notes = relationship("IncidentNote", back_populates="incident", cascade="all, delete-orphan")
-    evidence = relationship("IncidentEvidence", back_populates="incident", cascade="all, delete-orphan")
+    assignee = relationship(
+        "User", back_populates="incidents", foreign_keys=[assignee_id]
+    )
+    events = relationship(
+        "IncidentEvent", back_populates="incident", cascade="all, delete-orphan"
+    )
+    notes = relationship(
+        "IncidentNote", back_populates="incident", cascade="all, delete-orphan"
+    )
+    evidence = relationship(
+        "IncidentEvidence", back_populates="incident", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_incidents_status_risk", "status", "risk_level"),
@@ -204,8 +247,15 @@ class IncidentEvent(Base):
     __tablename__ = "incident_events"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    incident_id = Column(Integer, ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True)
-    event_id = Column(Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True)
+    incident_id = Column(
+        Integer,
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_id = Column(
+        Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     sequence = Column(Integer, default=0)
     behavior_stage = Column(String(100), nullable=True)
     is_key_event = Column(Boolean, default=False)
@@ -218,8 +268,15 @@ class IncidentNote(Base):
     __tablename__ = "incident_notes"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    incident_id = Column(Integer, ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True)
-    author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    incident_id = Column(
+        Integer,
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    author_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     content = Column(Text, nullable=False)
     is_internal = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
@@ -233,7 +290,12 @@ class IncidentEvidence(Base):
     __tablename__ = "incident_evidence"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    incident_id = Column(Integer, ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True)
+    incident_id = Column(
+        Integer,
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     evidence_type = Column(String(50), nullable=False)
     title = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)

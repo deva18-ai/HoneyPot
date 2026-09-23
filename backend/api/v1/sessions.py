@@ -1,14 +1,14 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, and_
-from sqlalchemy.orm import selectinload
-from typing import Optional, List
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from backend.db.session import get_db
-from backend.models import Session, Event, User
-from backend.schemas import SessionResponse, PaginatedResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
 from backend.api.deps import get_current_active_user
+from backend.db.session import get_db
+from backend.models import Event, Session, User
+from backend.schemas import PaginatedResponse, SessionResponse
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -17,16 +17,16 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 async def list_sessions(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    source_ip: Optional[str] = None,
-    service: Optional[str] = None,
-    risk_level: Optional[str] = None,
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
+    source_ip: str | None = None,
+    service: str | None = None,
+    risk_level: str | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     query = select(Session)
-    
+
     if source_ip:
         query = query.where(Session.source_ip == source_ip)
     if service:
@@ -37,22 +37,22 @@ async def list_sessions(
         query = query.where(Session.started_at >= start_time)
     if end_time:
         query = query.where(Session.started_at <= end_time)
-    
+
     query = query.order_by(desc(Session.started_at))
-    
+
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar()
-    
+
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     sessions = result.scalars().all()
-    
+
     return PaginatedResponse(
         items=[SessionResponse.model_validate(s) for s in sessions],
         total=total,
         page=page,
         page_size=page_size,
-        total_pages=(total + page_size - 1) // page_size
+        total_pages=(total + page_size - 1) // page_size,
     )
 
 
@@ -60,31 +60,30 @@ async def list_sessions(
 async def get_session_stats(
     hours: int = Query(24, ge=1, le=168),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-    
+
     total = await db.execute(
         select(func.count()).where(Session.started_at >= start_time)
     )
-    
+
     by_service = await db.execute(
         select(Session.service, func.count())
         .where(Session.started_at >= start_time)
         .group_by(Session.service)
     )
-    
+
     by_risk = await db.execute(
         select(Session.risk_level, func.count())
         .where(Session.started_at >= start_time)
         .group_by(Session.risk_level)
     )
-    
+
     avg_events = await db.execute(
-        select(func.avg(Session.event_count))
-        .where(Session.started_at >= start_time)
+        select(func.avg(Session.event_count)).where(Session.started_at >= start_time)
     )
-    
+
     top_ips = await db.execute(
         select(Session.source_ip, func.count().label("cnt"))
         .where(Session.started_at >= start_time)
@@ -92,7 +91,7 @@ async def get_session_stats(
         .order_by(desc("cnt"))
         .limit(10)
     )
-    
+
     return {
         "total_sessions": total.scalar(),
         "by_service": dict(by_service.all()),
@@ -107,10 +106,12 @@ async def get_session_stats(
 async def get_session(
     session_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(
-        select(Session).options(selectinload(Session.events)).where(Session.id == session_id)
+        select(Session)
+        .options(selectinload(Session.events))
+        .where(Session.id == session_id)
     )
     session = result.scalar_one_or_none()
     if not session:
@@ -122,12 +123,10 @@ async def get_session(
 async def get_session_events(
     session_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(
-        select(Event)
-        .where(Event.session_id == session_id)
-        .order_by(Event.timestamp)
+        select(Event).where(Event.session_id == session_id).order_by(Event.timestamp)
     )
     events = result.scalars().all()
     return {"session_id": session_id, "events": events}

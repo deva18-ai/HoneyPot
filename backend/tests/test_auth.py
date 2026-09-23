@@ -27,6 +27,7 @@ class TestAuth:
     async def test_login_inactive_user(self, client: AsyncClient, db_session):
         from backend.core.security import hash_password
         from backend.models import User
+
         user = User(
             username="inactive",
             email="inactive@test.com",

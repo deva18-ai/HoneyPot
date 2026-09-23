@@ -1,18 +1,25 @@
+import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
+
+import structlog
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-import structlog
-import uuid
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+)
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from slowapi.util import get_remote_address
 
 from backend.api.v1 import api_router
 from backend.core.config import get_settings
-from backend.db.session import init_db, close_db
+from backend.db.session import close_db, init_db
 from backend.services.websocket import ConnectionManager
 
 settings = get_settings()
@@ -26,7 +33,9 @@ REQUEST_COUNT = Counter(
 REQUEST_DURATION = Histogram(
     "http_request_duration_seconds", "HTTP request duration", ["method", "endpoint"]
 )
-ACTIVE_CONNECTIONS = Gauge("active_websocket_connections", "Active WebSocket connections")
+ACTIVE_CONNECTIONS = Gauge(
+    "active_websocket_connections", "Active WebSocket connections"
+)
 INCIDENTS_TOTAL = Counter("incidents_total", "Total incidents created", ["risk_level"])
 ALERTS_TOTAL = Counter("alerts_total", "Total alerts generated", ["alert_type"])
 EVENTS_TOTAL = Counter("events_total", "Total events recorded", ["service", "severity"])
@@ -35,7 +44,7 @@ structlog.configure(
     processors=[
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer()
+        structlog.processors.JSONRenderer(),
     ],
     logger_factory=structlog.stdlib.LoggerFactory(),
 )
@@ -53,14 +62,15 @@ def get_correlation_id(request: Request) -> str:
 async def lifespan(app: FastAPI):
     logger.info("starting_application", version=settings.APP_VERSION)
     await init_db()
-    
+
     from backend.services.honeypot_manager import HoneypotManager
+
     honeypot_manager = HoneypotManager()
     await honeypot_manager.start_all()
     app.state.honeypot_manager = honeypot_manager
-    
+
     yield
-    
+
     logger.info("shutting_down_application")
     await honeypot_manager.stop_all()
     await close_db()
@@ -101,10 +111,10 @@ async def metrics():
 async def log_requests(request: Request, call_next):
     start_time = datetime.now(timezone.utc)
     correlation_id = get_correlation_id(request)
-    
+
     # Bind correlation ID to logger context
     request_logger = logger.bind(correlation_id=correlation_id)
-    
+
     response = await call_next(request)
     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
@@ -122,7 +132,7 @@ async def log_requests(request: Request, call_next):
         duration=duration,
         client_ip=request.client.host if request.client else None,
     )
-    
+
     # Add correlation ID to response headers
     response.headers["X-Correlation-ID"] = correlation_id
     return response
@@ -130,11 +140,10 @@ async def log_requests(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error("unhandled_exception", path=request.url.path, error=str(exc), exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"}
+    logger.error(
+        "unhandled_exception", path=request.url.path, error=str(exc), exc_info=True
     )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 @app.websocket("/ws/events")
@@ -165,11 +174,13 @@ async def websocket_alerts(websocket: WebSocket):
 
 def broadcast_event(event_data: dict):
     import asyncio
+
     asyncio.create_task(manager.broadcast("event", event_data))
 
 
 def broadcast_alert(alert_data: dict):
     import asyncio
+
     asyncio.create_task(manager.broadcast("alert", alert_data))
 
 

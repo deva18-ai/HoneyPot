@@ -1,37 +1,35 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from datetime import datetime, timezone
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.session import get_db, engine
-from backend.schemas import HealthResponse
 from backend.core.config import get_settings
+from backend.db.session import get_db
+from backend.schemas import HealthResponse
 
 settings = get_settings()
 router = APIRouter(prefix="/health", tags=["health"])
 
 
 @router.get("", response_model=HealthResponse)
-async def health_check(
-    db: AsyncSession = Depends(get_db)
-):
+async def health_check(db: AsyncSession = Depends(get_db)):
     db_status = "healthy"
     redis_status = "not_configured"
-    
+
     try:
         await db.execute(text("SELECT 1"))
-    except Exception:
+    except Exception:  # noqa: BLE001
         db_status = "unhealthy"
-    
+
     try:
         import redis.asyncio as redis
+
         r = redis.from_url(settings.REDIS_URL)
         await r.ping()
         await r.close()
         redis_status = "healthy"
-    except Exception:
+    except Exception:  # noqa: BLE001
         redis_status = "unhealthy"
-    
+
     return HealthResponse(
         status="healthy" if db_status == "healthy" else "degraded",
         service=settings.APP_NAME,
@@ -42,13 +40,11 @@ async def health_check(
 
 
 @router.get("/ready")
-async def readiness_check(
-    db: AsyncSession = Depends(get_db)
-):
+async def readiness_check(db: AsyncSession = Depends(get_db)):
     try:
         await db.execute(text("SELECT 1"))
         return {"status": "ready"}
-    except Exception:
+    except Exception:  # noqa: BLE001
         return {"status": "not_ready"}, 503
 
 

@@ -1,6 +1,6 @@
 import sys
-from pathlib import Path
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -78,4 +78,5 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     import asyncio
+
     asyncio.run(run_migrations_online())

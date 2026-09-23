@@ -1,14 +1,18 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, and_, or_
-from sqlalchemy.orm import selectinload
-from typing import Optional, List
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from backend.db.session import get_db
-from backend.models import Event, Session, Alert, User
-from backend.schemas import EventResponse, EventCreate, SessionResponse, AlertResponse, PaginatedResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
 from backend.api.deps import get_current_active_user
+from backend.db.session import get_db
+from backend.models import Event, User
+from backend.schemas import (
+    EventCreate,
+    EventResponse,
+    PaginatedResponse,
+)
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -17,20 +21,20 @@ router = APIRouter(prefix="/events", tags=["events"])
 async def list_events(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    source_ip: Optional[str] = None,
-    service: Optional[str] = None,
-    event_type: Optional[str] = None,
-    severity: Optional[str] = None,
-    classification: Optional[str] = None,
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
-    min_score: Optional[int] = None,
-    max_score: Optional[int] = None,
+    source_ip: str | None = None,
+    service: str | None = None,
+    event_type: str | None = None,
+    severity: str | None = None,
+    classification: str | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    min_score: int | None = None,
+    max_score: int | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     query = select(Event).options(selectinload(Event.alerts))
-    
+
     if source_ip:
         query = query.where(Event.source_ip == source_ip)
     if service:
@@ -49,22 +53,22 @@ async def list_events(
         query = query.where(Event.threat_score >= min_score)
     if max_score is not None:
         query = query.where(Event.threat_score <= max_score)
-    
+
     query = query.order_by(desc(Event.timestamp))
-    
+
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar()
-    
+
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     events = result.scalars().all()
-    
+
     return PaginatedResponse(
         items=[EventResponse.model_validate(e) for e in events],
         total=total,
         page=page,
         page_size=page_size,
-        total_pages=(total + page_size - 1) // page_size
+        total_pages=(total + page_size - 1) // page_size,
     )
 
 
@@ -72,7 +76,7 @@ async def list_events(
 async def get_event(
     event_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(
         select(Event).options(selectinload(Event.alerts)).where(Event.id == event_id)
@@ -87,32 +91,30 @@ async def get_event(
 async def get_event_stats(
     hours: int = Query(24, ge=1, le=168),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-    
-    total = await db.execute(
-        select(func.count()).where(Event.timestamp >= start_time)
-    )
-    
+
+    total = await db.execute(select(func.count()).where(Event.timestamp >= start_time))
+
     by_severity = await db.execute(
         select(Event.severity, func.count())
         .where(Event.timestamp >= start_time)
         .group_by(Event.severity)
     )
-    
+
     by_service = await db.execute(
         select(Event.service, func.count())
         .where(Event.timestamp >= start_time)
         .group_by(Event.service)
     )
-    
+
     by_classification = await db.execute(
         select(Event.classification, func.count())
         .where(Event.timestamp >= start_time)
         .group_by(Event.classification)
     )
-    
+
     top_ips = await db.execute(
         select(Event.source_ip, func.count().label("cnt"))
         .where(Event.timestamp >= start_time)
@@ -120,12 +122,11 @@ async def get_event_stats(
         .order_by(desc("cnt"))
         .limit(10)
     )
-    
+
     avg_score = await db.execute(
-        select(func.avg(Event.threat_score))
-        .where(Event.timestamp >= start_time)
+        select(func.avg(Event.threat_score)).where(Event.timestamp >= start_time)
     )
-    
+
     return {
         "total_events": total.scalar(),
         "by_severity": dict(by_severity.all()),
@@ -142,29 +143,32 @@ async def get_event_trend(
     hours: int = Query(24, ge=1, le=168),
     interval_minutes: int = Query(60, ge=5, le=1440),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-    
+
     events = await db.execute(
         select(Event.timestamp, Event.severity, Event.threat_score)
         .where(Event.timestamp >= start_time)
         .order_by(Event.timestamp)
     )
-    
+
     events_data = events.all()
-    
+
     if not events_data:
         return {"trend": [], "interval_minutes": interval_minutes}
-    
+
     from collections import defaultdict
-    
-    buckets = defaultdict(lambda: {"count": 0, "high": 0, "medium": 0, "low": 0, "total_score": 0})
-    
+
+    buckets = defaultdict(
+        lambda: {"count": 0, "high": 0, "medium": 0, "low": 0, "total_score": 0}
+    )
+
     for ts, severity, score in events_data:
         bucket_ts = ts.replace(
             minute=(ts.minute // interval_minutes) * interval_minutes,
-            second=0, microsecond=0
+            second=0,
+            microsecond=0,
         )
         bucket_key = bucket_ts.isoformat()
         buckets[bucket_key]["count"] += 1
@@ -175,19 +179,23 @@ async def get_event_trend(
             buckets[bucket_key]["medium"] += 1
         else:
             buckets[bucket_key]["low"] += 1
-    
+
     trend = []
     for bucket_key in sorted(buckets.keys()):
         b = buckets[bucket_key]
-        trend.append({
-            "timestamp": bucket_key,
-            "count": b["count"],
-            "high": b["high"],
-            "medium": b["medium"],
-            "low": b["low"],
-            "avg_score": round(b["total_score"] / b["count"], 2) if b["count"] > 0 else 0
-        })
-    
+        trend.append(
+            {
+                "timestamp": bucket_key,
+                "count": b["count"],
+                "high": b["high"],
+                "medium": b["medium"],
+                "low": b["low"],
+                "avg_score": round(b["total_score"] / b["count"], 2)
+                if b["count"] > 0
+                else 0,
+            }
+        )
+
     return {"trend": trend, "interval_minutes": interval_minutes}
 
 
@@ -195,7 +203,7 @@ async def get_event_trend(
 async def create_event(
     event_data: EventCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     event = Event(**event_data.model_dump())
     db.add(event)

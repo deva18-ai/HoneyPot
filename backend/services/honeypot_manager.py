@@ -1,14 +1,17 @@
 import asyncio
-from typing import Dict, List, Optional
 from datetime import datetime, timezone
+
 import structlog
 
 from backend.core.config import get_settings
 from backend.db.session import async_session_maker
 from backend.models import Event, Session
-from backend.services.incident import classify_attack, map_to_mitre, calculate_risk_level
-from backend.services.websocket import broadcast_event, broadcast_alert
 from backend.services.alert_dedup import alert_dedup_service
+from backend.services.incident import (
+    classify_attack,
+    map_to_mitre,
+)
+from backend.services.websocket import broadcast_event
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -18,7 +21,7 @@ class BaseHoneypotService:
     def __init__(self, name: str, port: int):
         self.name = name
         self.port = port
-        self.server: Optional[asyncio.Server] = None
+        self.server: asyncio.Server | None = None
         self.running = False
 
     async def start(self):
@@ -35,18 +38,22 @@ class BaseHoneypotService:
             await self.server.wait_closed()
         logger.info("honeypot_stopped", service=self.name)
 
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    async def _handle_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ):
         addr = writer.get_extra_info("peername")
         ip = addr[0] if addr else "unknown"
         try:
             await self.handle_connection(reader, writer, ip)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error("client_handler_error", service=self.name, error=str(e))
         finally:
             writer.close()
             await writer.wait_closed()
 
-    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+    async def handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str
+    ):
         raise NotImplementedError
 
     async def _create_session(self, service: str, ip: str) -> int:
@@ -70,27 +77,34 @@ class BaseHoneypotService:
                 await db.execute(
                     Session.__table__.update()
                     .where(Session.id == event_data["session_id"])
-                    .values(event_count=Session.event_count + 1, risk_level=event_data.get("risk_level", "LOW"))
+                    .values(
+                        event_count=Session.event_count + 1,
+                        risk_level=event_data.get("risk_level", "LOW"),
+                    )
                 )
 
             await db.commit()
             await db.refresh(event)
 
-            broadcast_event({
-                "type": "event",
-                "data": {
-                    "id": event.id,
-                    "timestamp": event.timestamp.isoformat(),
-                    "source_ip": event.source_ip,
-                    "service": event.service,
-                    "event_type": event.event_type,
-                    "severity": event.severity,
-                    "threat_score": event.threat_score,
-                    "classification": event.classification,
+            broadcast_event(
+                {
+                    "type": "event",
+                    "data": {
+                        "id": event.id,
+                        "timestamp": event.timestamp.isoformat(),
+                        "source_ip": event.source_ip,
+                        "service": event.service,
+                        "event_type": event.event_type,
+                        "severity": event.severity,
+                        "threat_score": event.threat_score,
+                        "classification": event.classification,
+                    },
                 }
-            })
+            )
 
-            if event_data.get("classification", "").startswith(("BRUTE_FORCE", "EXPLOIT", "SCAN")):
+            if event_data.get("classification", "").startswith(
+                ("BRUTE_FORCE", "EXPLOIT", "SCAN")
+            ):
                 alert_type = event.classification.split("|")[0]
                 await alert_dedup_service.create_alert(
                     alert_type=alert_type,
@@ -105,7 +119,9 @@ class SSHService(BaseHoneypotService):
     def __init__(self, port: int):
         super().__init__("SSH", port)
 
-    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+    async def handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str
+    ):
         session_id = await self._create_session("SSH", ip)
 
         try:
@@ -131,28 +147,34 @@ class SSHService(BaseHoneypotService):
 
             classification = classify_attack(event_data, [])
             event_data.update(classification)
-            event_data["mitre_techniques"] = ",".join(map_to_mitre(classification["classification"]))
+            event_data["mitre_techniques"] = ",".join(
+                map_to_mitre(classification["classification"])
+            )
 
             await self._log_event(event_data)
 
             writer.write(b"Access denied. This is a defensive honeypot.\r\n")
             await writer.drain()
-        except Exception as e:
-            await self._log_event({
-                "source_ip": ip,
-                "service": "SSH",
-                "event_type": "CONNECTION",
-                "payload": str(e),
-                "result": "FAIL",
-                "session_id": session_id,
-            })
+        except Exception as e:  # noqa: BLE001
+            await self._log_event(
+                {
+                    "source_ip": ip,
+                    "service": "SSH",
+                    "event_type": "CONNECTION",
+                    "payload": str(e),
+                    "result": "FAIL",
+                    "session_id": session_id,
+                }
+            )
 
 
 class FTPService(BaseHoneypotService):
     def __init__(self, port: int):
         super().__init__("FTP", port)
 
-    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+    async def handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str
+    ):
         session_id = await self._create_session("FTP", ip)
 
         try:
@@ -178,28 +200,34 @@ class FTPService(BaseHoneypotService):
 
             classification = classify_attack(event_data, [])
             event_data.update(classification)
-            event_data["mitre_techniques"] = ",".join(map_to_mitre(classification["classification"]))
+            event_data["mitre_techniques"] = ",".join(
+                map_to_mitre(classification["classification"])
+            )
 
             await self._log_event(event_data)
 
             writer.write(b"530 Login incorrect\r\n")
             await writer.drain()
-        except Exception as e:
-            await self._log_event({
-                "source_ip": ip,
-                "service": "FTP",
-                "event_type": "CONNECTION",
-                "payload": str(e),
-                "result": "FAIL",
-                "session_id": session_id,
-            })
+        except Exception as e:  # noqa: BLE001
+            await self._log_event(
+                {
+                    "source_ip": ip,
+                    "service": "FTP",
+                    "event_type": "CONNECTION",
+                    "payload": str(e),
+                    "result": "FAIL",
+                    "session_id": session_id,
+                }
+            )
 
 
 class TelnetService(BaseHoneypotService):
     def __init__(self, port: int):
         super().__init__("TELNET", port)
 
-    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+    async def handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str
+    ):
         session_id = await self._create_session("TELNET", ip)
 
         try:
@@ -225,28 +253,34 @@ class TelnetService(BaseHoneypotService):
 
             classification = classify_attack(event_data, [])
             event_data.update(classification)
-            event_data["mitre_techniques"] = ",".join(map_to_mitre(classification["classification"]))
+            event_data["mitre_techniques"] = ",".join(
+                map_to_mitre(classification["classification"])
+            )
 
             await self._log_event(event_data)
 
             writer.write(b"Login failed.\r\n")
             await writer.drain()
-        except Exception as e:
-            await self._log_event({
-                "source_ip": ip,
-                "service": "TELNET",
-                "event_type": "CONNECTION",
-                "payload": str(e),
-                "result": "FAIL",
-                "session_id": session_id,
-            })
+        except Exception as e:  # noqa: BLE001
+            await self._log_event(
+                {
+                    "source_ip": ip,
+                    "service": "TELNET",
+                    "event_type": "CONNECTION",
+                    "payload": str(e),
+                    "result": "FAIL",
+                    "session_id": session_id,
+                }
+            )
 
 
 class DBService(BaseHoneypotService):
     def __init__(self, port: int):
         super().__init__("DB", port)
 
-    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+    async def handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str
+    ):
         session_id = await self._create_session("DB", ip)
 
         try:
@@ -267,26 +301,32 @@ class DBService(BaseHoneypotService):
 
             classification = classify_attack(event_data, [])
             event_data.update(classification)
-            event_data["mitre_techniques"] = ",".join(map_to_mitre(classification["classification"]))
+            event_data["mitre_techniques"] = ",".join(
+                map_to_mitre(classification["classification"])
+            )
 
             await self._log_event(event_data)
 
-            writer.write(b"ERROR: synthetic database endpoint; no real database is exposed.\r\n")
+            writer.write(
+                b"ERROR: synthetic database endpoint; no real database is exposed.\r\n"
+            )
             await writer.drain()
-        except Exception as e:
-            await self._log_event({
-                "source_ip": ip,
-                "service": "DB",
-                "event_type": "CONNECTION",
-                "payload": str(e),
-                "result": "FAIL",
-                "session_id": session_id,
-            })
+        except Exception as e:  # noqa: BLE001
+            await self._log_event(
+                {
+                    "source_ip": ip,
+                    "service": "DB",
+                    "event_type": "CONNECTION",
+                    "payload": str(e),
+                    "result": "FAIL",
+                    "session_id": session_id,
+                }
+            )
 
 
 class HoneypotManager:
     def __init__(self):
-        self.services: List[BaseHoneypotService] = []
+        self.services: list[BaseHoneypotService] = []
 
     async def start_all(self):
         self.services = [

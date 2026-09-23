@@ -1,20 +1,32 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, and_, or_, update
-from sqlalchemy.orm import selectinload
-from typing import Optional, List
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from backend.api.deps import get_current_active_user
 from backend.db.session import get_db
 from backend.models import (
-    Incident, IncidentEvent, IncidentNote, IncidentEvidence, Event, User
+    Event,
+    Incident,
+    IncidentEvent,
+    IncidentEvidence,
+    IncidentNote,
+    User,
 )
 from backend.schemas import (
-    IncidentResponse, IncidentCreate, IncidentUpdate, IncidentStatus, RiskLevel,
-    IncidentEventResponse, IncidentNoteResponse, IncidentNoteCreate,
-    IncidentEvidenceResponse, IncidentEvidenceCreate, PaginatedResponse
+    IncidentCreate,
+    IncidentEvidenceCreate,
+    IncidentEvidenceResponse,
+    IncidentNoteCreate,
+    IncidentNoteResponse,
+    IncidentResponse,
+    IncidentStatus,
+    IncidentUpdate,
+    PaginatedResponse,
+    RiskLevel,
 )
-from backend.api.deps import get_current_active_user, require_admin, require_analyst
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -23,23 +35,23 @@ router = APIRouter(prefix="/incidents", tags=["incidents"])
 async def list_incidents(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    status: Optional[IncidentStatus] = None,
-    risk_level: Optional[RiskLevel] = None,
-    classification: Optional[str] = None,
-    source_ip: Optional[str] = None,
-    assignee_id: Optional[int] = None,
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
-    min_score: Optional[int] = None,
-    max_score: Optional[int] = None,
+    status: IncidentStatus | None = None,
+    risk_level: RiskLevel | None = None,
+    classification: str | None = None,
+    source_ip: str | None = None,
+    assignee_id: int | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    min_score: int | None = None,
+    max_score: int | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     query = select(Incident).options(
         selectinload(Incident.assignee),
-        selectinload(Incident.events).selectinload(IncidentEvent.event)
+        selectinload(Incident.events).selectinload(IncidentEvent.event),
     )
-    
+
     if status:
         query = query.where(Incident.status == status)
     if risk_level:
@@ -58,22 +70,22 @@ async def list_incidents(
         query = query.where(Incident.threat_score >= min_score)
     if max_score is not None:
         query = query.where(Incident.threat_score <= max_score)
-    
+
     query = query.order_by(desc(Incident.first_seen))
-    
+
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar()
-    
+
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     incidents = result.scalars().all()
-    
+
     return PaginatedResponse(
         items=[IncidentResponse.model_validate(i) for i in incidents],
         total=total,
         page=page,
         page_size=page_size,
-        total_pages=(total + page_size - 1) // page_size
+        total_pages=(total + page_size - 1) // page_size,
     )
 
 
@@ -81,46 +93,46 @@ async def list_incidents(
 async def get_incident_stats(
     hours: int = Query(24, ge=1, le=720),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-    
+
     total = await db.execute(
         select(func.count()).where(Incident.first_seen >= start_time)
     )
-    
+
     by_status = await db.execute(
         select(Incident.status, func.count())
         .where(Incident.first_seen >= start_time)
         .group_by(Incident.status)
     )
-    
+
     by_risk = await db.execute(
         select(Incident.risk_level, func.count())
         .where(Incident.first_seen >= start_time)
         .group_by(Incident.risk_level)
     )
-    
+
     by_classification = await db.execute(
         select(Incident.classification, func.count())
         .where(Incident.first_seen >= start_time)
         .group_by(Incident.classification)
     )
-    
+
     avg_score = await db.execute(
-        select(func.avg(Incident.threat_score))
-        .where(Incident.first_seen >= start_time)
+        select(func.avg(Incident.threat_score)).where(Incident.first_seen >= start_time)
     )
-    
+
     open_critical = await db.execute(
-        select(func.count())
-        .where(and_(
-            Incident.first_seen >= start_time,
-            Incident.status == IncidentStatus.OPEN,
-            Incident.risk_level == RiskLevel.CRITICAL
-        ))
+        select(func.count()).where(
+            and_(
+                Incident.first_seen >= start_time,
+                Incident.status == IncidentStatus.OPEN,
+                Incident.risk_level == RiskLevel.CRITICAL,
+            )
+        )
     )
-    
+
     return {
         "total_incidents": total.scalar(),
         "by_status": dict(by_status.all()),
@@ -136,15 +148,17 @@ async def get_incident_stats(
 async def get_incident(
     incident_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(
-        select(Incident).options(
+        select(Incident)
+        .options(
             selectinload(Incident.assignee),
             selectinload(Incident.events).selectinload(IncidentEvent.event),
             selectinload(Incident.notes).selectinload(IncidentNote.author),
-            selectinload(Incident.evidence)
-        ).where(Incident.id == incident_id)
+            selectinload(Incident.evidence),
+        )
+        .where(Incident.id == incident_id)
     )
     incident = result.scalar_one_or_none()
     if not incident:
@@ -156,39 +170,41 @@ async def get_incident(
 async def get_incident_timeline(
     incident_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(
-        select(Incident).options(
-            selectinload(Incident.events).selectinload(IncidentEvent.event)
-        ).where(Incident.id == incident_id)
+        select(Incident)
+        .options(selectinload(Incident.events).selectinload(IncidentEvent.event))
+        .where(Incident.id == incident_id)
     )
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
     timeline = []
     for ie in sorted(incident.events, key=lambda x: x.sequence):
         e = ie.event
-        timeline.append({
-            "sequence": ie.sequence,
-            "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-            "event_id": e.id,
-            "event_type": e.event_type,
-            "service": e.service,
-            "source_ip": e.source_ip,
-            "severity": e.severity,
-            "threat_score": e.threat_score,
-            "behavior_stage": ie.behavior_stage,
-            "is_key_event": ie.is_key_event,
-            "username": e.username,
-            "request_path": e.request_path,
-            "payload": e.payload,
-            "result": e.result,
-            "classification": e.classification,
-            "mitre_techniques": e.mitre_techniques,
-        })
-    
+        timeline.append(
+            {
+                "sequence": ie.sequence,
+                "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+                "event_id": e.id,
+                "event_type": e.event_type,
+                "service": e.service,
+                "source_ip": e.source_ip,
+                "severity": e.severity,
+                "threat_score": e.threat_score,
+                "behavior_stage": ie.behavior_stage,
+                "is_key_event": ie.is_key_event,
+                "username": e.username,
+                "request_path": e.request_path,
+                "payload": e.payload,
+                "result": e.result,
+                "classification": e.classification,
+                "mitre_techniques": e.mitre_techniques,
+            }
+        )
+
     return {
         "incident_id": incident.incident_id,
         "timeline": timeline,
@@ -200,19 +216,22 @@ async def get_incident_timeline(
 async def get_incident_evidence(
     incident_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(
-        select(Incident).options(selectinload(Incident.evidence))
+        select(Incident)
+        .options(selectinload(Incident.evidence))
         .where(Incident.id == incident_id)
     )
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
     return {
         "incident_id": incident.incident_id,
-        "evidence": [IncidentEvidenceResponse.model_validate(e) for e in incident.evidence]
+        "evidence": [
+            IncidentEvidenceResponse.model_validate(e) for e in incident.evidence
+        ],
     }
 
 
@@ -220,15 +239,13 @@ async def get_incident_evidence(
 async def get_incident_mitre(
     incident_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
-    result = await db.execute(
-        select(Incident).where(Incident.id == incident_id)
-    )
+    result = await db.execute(select(Incident).where(Incident.id == incident_id))
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
     techniques = []
     if incident.mitre_techniques:
         technique_ids = incident.mitre_techniques.split(",")
@@ -238,29 +255,28 @@ async def get_incident_mitre(
             )
             technique = result.scalar_one_or_none()
             if technique:
-                techniques.append({
-                    "technique_id": technique.technique_id,
-                    "name": technique.name,
-                    "tactic": technique.tactic,
-                    "description": technique.description,
-                    "detection": technique.detection,
-                    "mitigation": technique.mitigation,
-                })
-    
-    return {
-        "incident_id": incident.incident_id,
-        "techniques": techniques
-    }
+                techniques.append(
+                    {
+                        "technique_id": technique.technique_id,
+                        "name": technique.name,
+                        "tactic": technique.tactic,
+                        "description": technique.description,
+                        "detection": technique.detection,
+                        "mitigation": technique.mitigation,
+                    }
+                )
+
+    return {"incident_id": incident.incident_id, "techniques": techniques}
 
 
 @router.post("", response_model=IncidentResponse, status_code=201)
 async def create_incident(
     incident_data: IncidentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     from backend.services.incident import generate_incident_id
-    
+
     incident = Incident(
         **incident_data.model_dump(),
         incident_id=generate_incident_id(),
@@ -277,23 +293,27 @@ async def update_incident(
     incident_id: int,
     incident_data: IncidentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(select(Incident).where(Incident.id == incident_id))
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
     update_data = incident_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(incident, field, value)
-    
+
     incident.updated_at = datetime.now(timezone.utc)
-    
-    if incident_data.status in [IncidentStatus.RESOLVED, IncidentStatus.CLOSED, IncidentStatus.FALSE_POSITIVE]:
+
+    if incident_data.status in [
+        IncidentStatus.RESOLVED,
+        IncidentStatus.CLOSED,
+        IncidentStatus.FALSE_POSITIVE,
+    ]:
         incident.closed_at = datetime.now(timezone.utc)
         incident.closed_by = current_user.id
-    
+
     await db.commit()
     await db.refresh(incident)
     return incident
@@ -304,17 +324,15 @@ async def add_incident_note(
     incident_id: int,
     note_data: IncidentNoteCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(select(Incident).where(Incident.id == incident_id))
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
     note = IncidentNote(
-        incident_id=incident_id,
-        author_id=current_user.id,
-        **note_data.model_dump()
+        incident_id=incident_id, author_id=current_user.id, **note_data.model_dump()
     )
     db.add(note)
     incident.updated_at = datetime.now(timezone.utc)
@@ -328,17 +346,14 @@ async def add_incident_evidence(
     incident_id: int,
     evidence_data: IncidentEvidenceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(select(Incident).where(Incident.id == incident_id))
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
-    evidence = IncidentEvidence(
-        incident_id=incident_id,
-        **evidence_data.model_dump()
-    )
+
+    evidence = IncidentEvidence(incident_id=incident_id, **evidence_data.model_dump())
     db.add(evidence)
     incident.updated_at = datetime.now(timezone.utc)
     await db.commit()
@@ -350,16 +365,16 @@ async def add_incident_evidence(
 async def delete_incident(
     incident_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admins can delete incidents")
-    
+
     result = await db.execute(select(Incident).where(Incident.id == incident_id))
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
     await db.delete(incident)
     await db.commit()
     return {"message": "Incident deleted"}
@@ -368,36 +383,39 @@ async def delete_incident(
 @router.post("/{incident_id}/link-events")
 async def link_events_to_incident(
     incident_id: int,
-    event_ids: List[int],
+    event_ids: list[int],
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     result = await db.execute(select(Incident).where(Incident.id == incident_id))
     incident = result.scalar_one_or_none()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
     for idx, event_id in enumerate(event_ids):
         result = await db.execute(select(Event).where(Event.id == event_id))
         event = result.scalar_one_or_none()
         if not event:
             continue
-        
+
         existing = await db.execute(
             select(IncidentEvent).where(
-                and_(IncidentEvent.incident_id == incident_id, IncidentEvent.event_id == event_id)
+                and_(
+                    IncidentEvent.incident_id == incident_id,
+                    IncidentEvent.event_id == event_id,
+                )
             )
         )
         if existing.scalar_one_or_none():
             continue
-        
+
         ie = IncidentEvent(
             incident_id=incident_id,
             event_id=event_id,
             sequence=idx,
         )
         db.add(ie)
-    
+
     incident.event_count = len(event_ids)
     incident.updated_at = datetime.now(timezone.utc)
     await db.commit()
