@@ -1,9 +1,14 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import structlog
+import uuid
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 from backend.api.v1 import api_router
 from backend.core.config import get_settings
@@ -11,6 +16,20 @@ from backend.db.session import init_db, close_db
 from backend.services.websocket import ConnectionManager
 
 settings = get_settings()
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+
+# Prometheus metrics
+REQUEST_COUNT = Counter(
+    "http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"]
+)
+REQUEST_DURATION = Histogram(
+    "http_request_duration_seconds", "HTTP request duration", ["method", "endpoint"]
+)
+ACTIVE_CONNECTIONS = Gauge("active_websocket_connections", "Active WebSocket connections")
+INCIDENTS_TOTAL = Counter("incidents_total", "Total incidents created", ["risk_level"])
+ALERTS_TOTAL = Counter("alerts_total", "Total alerts generated", ["alert_type"])
+EVENTS_TOTAL = Counter("events_total", "Total events recorded", ["service", "severity"])
 
 structlog.configure(
     processors=[
@@ -24,6 +43,10 @@ structlog.configure(
 logger = structlog.get_logger()
 
 manager = ConnectionManager()
+
+
+def get_correlation_id(request: Request) -> str:
+    return request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
 
 
 @asynccontextmanager
@@ -53,6 +76,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -66,13 +92,29 @@ app.include_router(api_router, prefix="/api/v1")
 app.mount("/static", StaticFiles(directory=settings.DASHBOARD_DIR), name="static")
 
 
+@app.get("/metrics")
+async def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start_time = datetime.now(timezone.utc)
+    correlation_id = get_correlation_id(request)
+    
+    # Bind correlation ID to logger context
+    request_logger = logger.bind(correlation_id=correlation_id)
+    
     response = await call_next(request)
     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-    
-    logger.info(
+
+    endpoint = request.url.path
+    REQUEST_COUNT.labels(
+        method=request.method, endpoint=endpoint, status=response.status_code
+    ).inc()
+    REQUEST_DURATION.labels(method=request.method, endpoint=endpoint).observe(duration)
+
+    request_logger.info(
         "http_request",
         method=request.method,
         path=request.url.path,
@@ -80,6 +122,9 @@ async def log_requests(request: Request, call_next):
         duration=duration,
         client_ip=request.client.host if request.client else None,
     )
+    
+    # Add correlation ID to response headers
+    response.headers["X-Correlation-ID"] = correlation_id
     return response
 
 
@@ -94,7 +139,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.websocket("/ws/events")
 async def websocket_events(websocket: WebSocket):
-    await manager.connect(websocket)
+    token = websocket.query_params.get("token")
+    await manager.connect(websocket, channel="event", token=token)
     try:
         while True:
             data = await websocket.receive_text()
@@ -106,7 +152,8 @@ async def websocket_events(websocket: WebSocket):
 
 @app.websocket("/ws/alerts")
 async def websocket_alerts(websocket: WebSocket):
-    await manager.connect(websocket)
+    token = websocket.query_params.get("token")
+    await manager.connect(websocket, channel="alert", token=token)
     try:
         while True:
             data = await websocket.receive_text()

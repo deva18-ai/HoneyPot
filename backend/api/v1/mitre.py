@@ -4,7 +4,7 @@ from sqlalchemy import select, func
 from typing import Optional, List
 
 from backend.db.session import get_db
-from backend.models import MitreTechnique
+from backend.models import MitreTechnique, User
 from backend.schemas import MitreTechniqueResponse, PaginatedResponse
 from backend.api.deps import get_current_active_user
 

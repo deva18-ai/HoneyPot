@@ -1,42 +1,32 @@
-# Build stage for frontend
-FROM node:20-alpine AS frontend-builder
-WORKDIR /app/dashboard
-COPY dashboard/package*.json ./
-RUN npm ci
-COPY dashboard/ ./
-RUN npm run build
+FROM python:3.12-slim as builder
 
-# Production stage
-FROM python:3.12-slim
 WORKDIR /app
 
-# Install system dependencies
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock* ./
+RUN uv pip install --system --no-cache -r pyproject.toml
+
+FROM python:3.12-slim as runtime
+
+WORKDIR /app
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN useradd --create-home --shell /bin/bash app
 
-# Copy application code
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
 COPY . .
 
-# Copy built frontend from builder stage
-COPY --from=frontend-builder /app/backend/dashboard ./backend/dashboard
+RUN mkdir -p /app/data /app/logs /app/reports/generated \
+    && chown -R app:app /app
 
-# Create non-root user
-RUN useradd -m -u 1000 honeytrap && \
-    chown -R honeytrap:honeytrap /app
-USER honeytrap
+USER app
 
-# Expose ports
-EXPOSE 8080 2222 2121 2323 9090 8081
+EXPOSE 8000 2222 2121 2323 9090
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v1/health')" || exit 1
-
-# Run application
-CMD ["python", "-m", "backend.main"]
+CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

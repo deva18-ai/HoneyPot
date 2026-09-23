@@ -1,5 +1,3 @@
-import socket
-import threading
 import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
@@ -10,100 +8,48 @@ from backend.db.session import async_session_maker
 from backend.models import Event, Session
 from backend.services.incident import classify_attack, map_to_mitre, calculate_risk_level
 from backend.services.websocket import broadcast_event, broadcast_alert
-from backend.core.security import hash_password
+from backend.services.alert_dedup import alert_dedup_service
 
 logger = structlog.get_logger()
 settings = get_settings()
 
 
-class HoneypotService:
-    def __init__(self, name: str, port: int, handler):
+class BaseHoneypotService:
+    def __init__(self, name: str, port: int):
         self.name = name
         self.port = port
-        self.handler = handler
-        self.server: Optional[socket.socket] = None
-        self.thread: Optional[threading.Thread] = None
+        self.server: Optional[asyncio.Server] = None
         self.running = False
 
-    def start(self):
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server.bind((settings.HOST, self.port))
-        self.server.listen(20)
+    async def start(self):
+        self.server = await asyncio.start_server(
+            self._handle_client, settings.HOST, self.port
+        )
         self.running = True
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
         logger.info("honeypot_started", service=self.name, port=self.port)
 
-    def _run(self):
-        while self.running:
-            try:
-                conn, addr = self.server.accept()
-                client_thread = threading.Thread(
-                    target=self._handle_client, args=(conn, addr), daemon=True
-                )
-                client_thread.start()
-            except OSError:
-                break
-
-    def _handle_client(self, conn: socket.socket, addr: tuple):
-        try:
-            self.handler(conn, addr)
-        except Exception as e:
-            logger.error("client_handler_error", service=self.name, error=str(e))
-        finally:
-            conn.close()
-
-    def stop(self):
+    async def stop(self):
         self.running = False
         if self.server:
             self.server.close()
+            await self.server.wait_closed()
         logger.info("honeypot_stopped", service=self.name)
 
-
-class SSHService:
-    @staticmethod
-    def handle(conn: socket.socket, addr: tuple):
-        ip = addr[0]
-        session_id = asyncio.run(SSHService._create_session("SSH", ip))
-        
+    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        addr = writer.get_extra_info("peername")
+        ip = addr[0] if addr else "unknown"
         try:
-            conn.sendall(b"SSH-2.0-OpenSSH_8.9-HoneyTrap\r\nlogin: ")
-            username = conn.recv(256).decode("utf-8", "ignore").strip()
-            conn.sendall(b"password: ")
-            password = conn.recv(256).decode("utf-8", "ignore").strip()
-            
-            event_data = {
-                "source_ip": ip,
-                "service": "SSH",
-                "event_type": "AUTH_ATTEMPT",
-                "username": username,
-                "password": password,
-                "result": "FAIL",
-                "session_id": session_id,
-                "fingerprint": "unknown-socket-client",
-                "country": "LOCAL-LAB",
-            }
-            
-            classification = classify_attack(event_data, [])
-            event_data.update(classification)
-            event_data["mitre_techniques"] = ",".join(map_to_mitre(classification["classification"]))
-            
-            asyncio.run(SSHService._log_event(event_data))
-            
-            conn.sendall(b"Access denied. This is a defensive honeypot.\r\n")
+            await self.handle_connection(reader, writer, ip)
         except Exception as e:
-            asyncio.run(SSHService._log_event({
-                "source_ip": ip,
-                "service": "SSH",
-                "event_type": "CONNECTION",
-                "payload": str(e),
-                "result": "FAIL",
-                "session_id": session_id,
-            }))
+            logger.error("client_handler_error", service=self.name, error=str(e))
+        finally:
+            writer.close()
+            await writer.wait_closed()
 
-    @staticmethod
-    async def _create_session(service: str, ip: str) -> int:
+    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+        raise NotImplementedError
+
+    async def _create_session(self, service: str, ip: str) -> int:
         async with async_session_maker() as db:
             session = Session(
                 source_ip=ip,
@@ -115,22 +61,21 @@ class SSHService:
             await db.refresh(session)
             return session.id
 
-    @staticmethod
-    async def _log_event(event_data: dict):
+    async def _log_event(self, event_data: dict):
         async with async_session_maker() as db:
             event = Event(**event_data)
             db.add(event)
-            
+
             if event_data.get("session_id"):
                 await db.execute(
                     Session.__table__.update()
                     .where(Session.id == event_data["session_id"])
-                    .values(event_count=Session.event_count + 1, risk_level=event_data["risk_level"])
+                    .values(event_count=Session.event_count + 1, risk_level=event_data.get("risk_level", "LOW"))
                 )
-            
+
             await db.commit()
             await db.refresh(event)
-            
+
             broadcast_event({
                 "type": "event",
                 "data": {
@@ -144,31 +89,81 @@ class SSHService:
                     "classification": event.classification,
                 }
             })
-            
+
             if event_data.get("classification", "").startswith(("BRUTE_FORCE", "EXPLOIT", "SCAN")):
-                broadcast_alert({
-                    "type": "alert",
-                    "data": {
-                        "event_id": event.id,
-                        "alert_type": event.classification.split("|")[0],
-                        "message": f"{event.classification.split('|')[0]} detected from {event.source_ip}",
-                        "created_at": event.timestamp.isoformat(),
-                    }
-                })
+                alert_type = event.classification.split("|")[0]
+                await alert_dedup_service.create_alert(
+                    alert_type=alert_type,
+                    source_ip=event.source_ip,
+                    message=f"{alert_type} detected from {event.source_ip}",
+                    event_id=event.id,
+                    classification=event.classification,
+                )
 
 
-class FTPService:
-    @staticmethod
-    def handle(conn: socket.socket, addr: tuple):
-        ip = addr[0]
-        session_id = asyncio.run(FTPService._create_session("FTP", ip))
-        
+class SSHService(BaseHoneypotService):
+    def __init__(self, port: int):
+        super().__init__("SSH", port)
+
+    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+        session_id = await self._create_session("SSH", ip)
+
         try:
-            conn.sendall(b"220 HoneyTrap FTP Service\r\nUsername: ")
-            username = conn.recv(256).decode("utf-8", "ignore").strip()
-            conn.sendall(b"Password: ")
-            password = conn.recv(256).decode("utf-8", "ignore").strip()
-            
+            writer.write(b"SSH-2.0-OpenSSH_8.9-HoneyTrap\r\nlogin: ")
+            await writer.drain()
+            username = (await reader.read(256)).decode("utf-8", "ignore").strip()
+
+            writer.write(b"password: ")
+            await writer.drain()
+            password = (await reader.read(256)).decode("utf-8", "ignore").strip()
+
+            event_data = {
+                "source_ip": ip,
+                "service": "SSH",
+                "event_type": "AUTH_ATTEMPT",
+                "username": username,
+                "password": password,
+                "result": "FAIL",
+                "session_id": session_id,
+                "fingerprint": "unknown-socket-client",
+                "country": "LOCAL-LAB",
+            }
+
+            classification = classify_attack(event_data, [])
+            event_data.update(classification)
+            event_data["mitre_techniques"] = ",".join(map_to_mitre(classification["classification"]))
+
+            await self._log_event(event_data)
+
+            writer.write(b"Access denied. This is a defensive honeypot.\r\n")
+            await writer.drain()
+        except Exception as e:
+            await self._log_event({
+                "source_ip": ip,
+                "service": "SSH",
+                "event_type": "CONNECTION",
+                "payload": str(e),
+                "result": "FAIL",
+                "session_id": session_id,
+            })
+
+
+class FTPService(BaseHoneypotService):
+    def __init__(self, port: int):
+        super().__init__("FTP", port)
+
+    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+        session_id = await self._create_session("FTP", ip)
+
+        try:
+            writer.write(b"220 HoneyTrap FTP Service\r\nUsername: ")
+            await writer.drain()
+            username = (await reader.read(256)).decode("utf-8", "ignore").strip()
+
+            writer.write(b"Password: ")
+            await writer.drain()
+            password = (await reader.read(256)).decode("utf-8", "ignore").strip()
+
             event_data = {
                 "source_ip": ip,
                 "service": "FTP",
@@ -180,54 +175,42 @@ class FTPService:
                 "fingerprint": "unknown-socket-client",
                 "country": "LOCAL-LAB",
             }
-            
+
             classification = classify_attack(event_data, [])
             event_data.update(classification)
             event_data["mitre_techniques"] = ",".join(map_to_mitre(classification["classification"]))
-            
-            asyncio.run(FTPService._log_event(event_data))
-            
-            conn.sendall(b"530 Login incorrect\r\n")
+
+            await self._log_event(event_data)
+
+            writer.write(b"530 Login incorrect\r\n")
+            await writer.drain()
         except Exception as e:
-            asyncio.run(FTPService._log_event({
+            await self._log_event({
                 "source_ip": ip,
                 "service": "FTP",
                 "event_type": "CONNECTION",
                 "payload": str(e),
                 "result": "FAIL",
                 "session_id": session_id,
-            }))
-
-    @staticmethod
-    async def _create_session(service: str, ip: str) -> int:
-        async with async_session_maker() as db:
-            session = Session(source_ip=ip, service=service, started_at=datetime.now(timezone.utc))
-            db.add(session)
-            await db.commit()
-            await db.refresh(session)
-            return session.id
-
-    @staticmethod
-    async def _log_event(event_data: dict):
-        async with async_session_maker() as db:
-            event = Event(**event_data)
-            db.add(event)
-            await db.commit()
-            broadcast_event({"type": "event", "data": {"id": event.id, **event_data}})
+            })
 
 
-class TelnetService:
-    @staticmethod
-    def handle(conn: socket.socket, addr: tuple):
-        ip = addr[0]
-        session_id = asyncio.run(TelnetService._create_session("TELNET", ip))
-        
+class TelnetService(BaseHoneypotService):
+    def __init__(self, port: int):
+        super().__init__("TELNET", port)
+
+    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+        session_id = await self._create_session("TELNET", ip)
+
         try:
-            conn.sendall(b"Welcome to HoneyTrap Telnet\r\nlogin: ")
-            username = conn.recv(256).decode("utf-8", "ignore").strip()
-            conn.sendall(b"Password: ")
-            password = conn.recv(256).decode("utf-8", "ignore").strip()
-            
+            writer.write(b"Welcome to HoneyTrap Telnet\r\nlogin: ")
+            await writer.drain()
+            username = (await reader.read(256)).decode("utf-8", "ignore").strip()
+
+            writer.write(b"Password: ")
+            await writer.drain()
+            password = (await reader.read(256)).decode("utf-8", "ignore").strip()
+
             event_data = {
                 "source_ip": ip,
                 "service": "TELNET",
@@ -239,52 +222,38 @@ class TelnetService:
                 "fingerprint": "unknown-socket-client",
                 "country": "LOCAL-LAB",
             }
-            
+
             classification = classify_attack(event_data, [])
             event_data.update(classification)
             event_data["mitre_techniques"] = ",".join(map_to_mitre(classification["classification"]))
-            
-            asyncio.run(TelnetService._log_event(event_data))
-            
-            conn.sendall(b"Login failed.\r\n")
+
+            await self._log_event(event_data)
+
+            writer.write(b"Login failed.\r\n")
+            await writer.drain()
         except Exception as e:
-            asyncio.run(TelnetService._log_event({
+            await self._log_event({
                 "source_ip": ip,
                 "service": "TELNET",
                 "event_type": "CONNECTION",
                 "payload": str(e),
                 "result": "FAIL",
                 "session_id": session_id,
-            }))
-
-    @staticmethod
-    async def _create_session(service: str, ip: str) -> int:
-        async with async_session_maker() as db:
-            session = Session(source_ip=ip, service=service, started_at=datetime.now(timezone.utc))
-            db.add(session)
-            await db.commit()
-            await db.refresh(session)
-            return session.id
-
-    @staticmethod
-    async def _log_event(event_data: dict):
-        async with async_session_maker() as db:
-            event = Event(**event_data)
-            db.add(event)
-            await db.commit()
-            broadcast_event({"type": "event", "data": {"id": event.id, **event_data}})
+            })
 
 
-class DBService:
-    @staticmethod
-    def handle(conn: socket.socket, addr: tuple):
-        ip = addr[0]
-        session_id = asyncio.run(DBService._create_session("DB", ip))
-        
+class DBService(BaseHoneypotService):
+    def __init__(self, port: int):
+        super().__init__("DB", port)
+
+    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str):
+        session_id = await self._create_session("DB", ip)
+
         try:
-            conn.sendall(b"PostgreSQL 15.2 HoneyTrap Database\r\n")
-            data = conn.recv(512).decode("utf-8", "ignore").strip()
-            
+            writer.write(b"PostgreSQL 15.2 HoneyTrap Database\r\n")
+            await writer.drain()
+            data = (await reader.read(512)).decode("utf-8", "ignore").strip()
+
             event_data = {
                 "source_ip": ip,
                 "service": "DB",
@@ -295,60 +264,44 @@ class DBService:
                 "fingerprint": "unknown-socket-client",
                 "country": "LOCAL-LAB",
             }
-            
+
             classification = classify_attack(event_data, [])
             event_data.update(classification)
             event_data["mitre_techniques"] = ",".join(map_to_mitre(classification["classification"]))
-            
-            asyncio.run(DBService._log_event(event_data))
-            
-            conn.sendall(b"ERROR: synthetic database endpoint; no real database is exposed.\r\n")
+
+            await self._log_event(event_data)
+
+            writer.write(b"ERROR: synthetic database endpoint; no real database is exposed.\r\n")
+            await writer.drain()
         except Exception as e:
-            asyncio.run(DBService._log_event({
+            await self._log_event({
                 "source_ip": ip,
                 "service": "DB",
                 "event_type": "CONNECTION",
                 "payload": str(e),
                 "result": "FAIL",
                 "session_id": session_id,
-            }))
-
-    @staticmethod
-    async def _create_session(service: str, ip: str) -> int:
-        async with async_session_maker() as db:
-            session = Session(source_ip=ip, service=service, started_at=datetime.now(timezone.utc))
-            db.add(session)
-            await db.commit()
-            await db.refresh(session)
-            return session.id
-
-    @staticmethod
-    async def _log_event(event_data: dict):
-        async with async_session_maker() as db:
-            event = Event(**event_data)
-            db.add(event)
-            await db.commit()
-            broadcast_event({"type": "event", "data": {"id": event.id, **event_data}})
+            })
 
 
 class HoneypotManager:
     def __init__(self):
-        self.services: List[HoneypotService] = []
+        self.services: List[BaseHoneypotService] = []
 
     async def start_all(self):
         self.services = [
-            HoneypotService("SSH", settings.SSH_PORT, SSHService.handle),
-            HoneypotService("FTP", settings.FTP_PORT, FTPService.handle),
-            HoneypotService("TELNET", settings.TELNET_PORT, TelnetService.handle),
-            HoneypotService("DB", settings.DB_PORT, DBService.handle),
+            SSHService(settings.SSH_PORT),
+            FTPService(settings.FTP_PORT),
+            TelnetService(settings.TELNET_PORT),
+            DBService(settings.DB_PORT),
         ]
-        
+
         for service in self.services:
-            service.start()
-        
+            await service.start()
+
         logger.info("all_honeypots_started", count=len(self.services))
 
     async def stop_all(self):
         for service in self.services:
-            service.stop()
+            await service.stop()
         logger.info("all_honeypots_stopped")

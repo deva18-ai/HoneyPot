@@ -1,7 +1,12 @@
-from typing import Dict, List, Set
-from fastapi import WebSocket
+from typing import Dict, List, Set, Optional
+from fastapi import WebSocket, WebSocketException, status
 import json
 import asyncio
+
+from backend.core.security import decode_token
+from backend.db.session import async_session_maker
+from backend.models import User
+from sqlalchemy import select
 
 
 class ConnectionManager:
@@ -13,14 +18,39 @@ class ConnectionManager:
         }
         self._lock = asyncio.Lock()
 
-    async def connect(self, websocket: WebSocket, channel: str = "event"):
+    async def connect(self, websocket: WebSocket, channel: str = "event", token: Optional[str] = None):
+        # Validate token if provided
+        if token:
+            user = await self._validate_token(token)
+            if not user:
+                raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+            websocket.state.user = user
+        
         await websocket.accept()
         async with self._lock:
             if channel not in self.active_connections:
                 self.active_connections[channel] = set()
             self.active_connections[channel].add(websocket)
 
-    def disconnect(self, websocket: WebSocket, channel: str = "event"):
+    async def _validate_token(self, token: str) -> Optional[User]:
+        try:
+            payload = decode_token(token)
+            if not payload or payload.get("type") != "access":
+                return None
+            user_id = payload.get("sub")
+            if not user_id:
+                return None
+            
+            async with async_session_maker() as db:
+                result = await db.execute(select(User).where(User.id == int(user_id)))
+                user = result.scalar_one_or_none()
+                if user and user.is_active:
+                    return user
+        except Exception:
+            pass
+        return None
+
+    async def disconnect(self, websocket: WebSocket, channel: str = "event"):
         async with self._lock:
             if channel in self.active_connections:
                 self.active_connections[channel].discard(websocket)
@@ -55,3 +85,13 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+def broadcast_event(event_data: dict):
+    import asyncio
+    asyncio.create_task(manager.broadcast("event", event_data))
+
+
+def broadcast_alert(alert_data: dict):
+    import asyncio
+    asyncio.create_task(manager.broadcast("alert", alert_data))

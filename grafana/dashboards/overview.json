@@ -1,0 +1,84 @@
+{
+  "dashboard": {
+    "title": "HoneyTrap Overview",
+    "tags": ["honeytrap", "security"],
+    "timezone": "utc",
+    "panels": [
+      {
+        "title": "HTTP Requests Total",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total[5m])",
+            "legendFormat": "{{method}} {{endpoint}}"
+          }
+        ],
+        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
+      },
+      {
+        "title": "Request Duration",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p50"
+          }
+        ],
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+      },
+      {
+        "title": "Active WebSocket Connections",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "active_websocket_connections",
+            "legendFormat": "connections"
+          }
+        ],
+        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8}
+      },
+      {
+        "title": "Incidents by Risk Level",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(incidents_total[5m])",
+            "legendFormat": "{{risk_level}}"
+          }
+        ],
+        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}
+      },
+      {
+        "title": "Alerts by Type",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(alerts_total[5m])",
+            "legendFormat": "{{alert_type}}"
+          }
+        ],
+        "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8}
+      },
+      {
+        "title": "Events by Service and Severity",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(events_total[5m])",
+            "legendFormat": "{{service}} {{severity}}"
+          }
+        ],
+        "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "10s"
+  }
+}

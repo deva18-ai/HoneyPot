@@ -6,7 +6,7 @@ from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 
 from backend.db.session import get_db
-from backend.models import Session, Event
+from backend.models import Session, Event, User
 from backend.schemas import SessionResponse, PaginatedResponse
 from backend.api.deps import get_current_active_user
 

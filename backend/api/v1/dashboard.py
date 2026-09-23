@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
 from backend.db.session import get_db
-from backend.models import Event, Incident, IPStats, Session, Alert, MitreTechnique
+from backend.models import Event, Incident, IPStats, Session, Alert, MitreTechnique, User
 from backend.schemas import DashboardStats
 from backend.api.deps import get_current_active_user
 

@@ -3,6 +3,8 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone, timedelta
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from backend.db.session import get_db
 from backend.core.security import (
@@ -22,8 +24,11 @@ from backend.core.config import get_settings
 settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
+limiter = Limiter(key_func=get_remote_address)
+
 
 @router.post("/login", response_model=Token)
+@limiter.limit("5/minute")
 async def login(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -55,6 +60,7 @@ async def login(
 
 
 @router.post("/refresh", response_model=Token)
+@limiter.limit("10/minute")
 async def refresh_token(
     request: Request,
     token_data: RefreshRequest,

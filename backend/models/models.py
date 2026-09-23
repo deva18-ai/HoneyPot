@@ -75,6 +75,10 @@ class Event(Base):
     __table_args__ = (
         Index("ix_events_ip_time", "source_ip", "timestamp"),
         Index("ix_events_severity_time", "severity", "timestamp"),
+        Index("ix_events_service_time", "service", "timestamp"),
+        Index("ix_events_classification_time", "classification", "timestamp"),
+        Index("ix_events_threat_score_time", "threat_score", "timestamp"),
+        Index("ix_events_ip_service", "source_ip", "service"),
     )
 
 
@@ -96,6 +100,8 @@ class Session(Base):
 
     __table_args__ = (
         Index("ix_sessions_ip_time", "source_ip", "started_at"),
+        Index("ix_sessions_service_time", "service", "started_at"),
+        Index("ix_sessions_risk_time", "risk_level", "started_at"),
     )
 
 
@@ -112,6 +118,11 @@ class Alert(Base):
     acknowledged_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     event = relationship("Event", back_populates="alerts")
+
+    __table_args__ = (
+        Index("ix_alerts_type_time", "alert_type", "created_at"),
+        Index("ix_alerts_ack_time", "acknowledged", "created_at"),
+    )
 
 
 class IPStats(Base):
@@ -132,6 +143,9 @@ class IPStats(Base):
 
     __table_args__ = (
         Index("ix_ip_stats_threat_score", "threat_score"),
+        Index("ix_ip_stats_last_seen", "last_seen"),
+        Index("ix_ip_stats_country", "country"),
+        Index("ix_ip_stats_blocked_score", "is_blocked", "threat_score"),
     )
 
 
@@ -177,6 +191,13 @@ class Incident(Base):
     events = relationship("IncidentEvent", back_populates="incident", cascade="all, delete-orphan")
     notes = relationship("IncidentNote", back_populates="incident", cascade="all, delete-orphan")
     evidence = relationship("IncidentEvidence", back_populates="incident", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_incidents_status_risk", "status", "risk_level"),
+        Index("ix_incidents_ip_time", "source_ip", "first_seen"),
+        Index("ix_incidents_classification_time", "classification", "first_seen"),
+        Index("ix_incidents_assignee_time", "assignee_id", "first_seen"),
+    )
 
 
 class IncidentEvent(Base):
