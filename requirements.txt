@@ -40,3 +40,6 @@ httpx>=0.27,<1
 # Utilities
 python-dotenv>=1.0,<2
 requests>=2.31,<3
+slowapi
+asyncpg
+email-validator
